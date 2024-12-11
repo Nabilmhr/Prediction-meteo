@@ -1,0 +1,133 @@
+---
+title: "PROJET SERIE CHRONOLOGIQUE"
+author: "NABIL MARHAR, HARON REZGUI & AYMAN YAYA"
+date: '2023-04-20'
+output:
+  pdf_document: 
+    fig_caption: yes
+    fig_crop: false
+    fig_height: 4
+    fig_width: 6
+  html_document: default
+---
+
+Nous étudions une base de données contenant les relevés quotidiens de température de la ville de Marignane sur les 13 dernières années. Il est alors intéréssant d'analyser ce jeu de données, de telle manière à observer la tendance et la saisonnalité de cette série chronologique, et ainsi pouvoir par la suite modéliser cette série qui nous permettra alors de comprendre et prédire le comportement de cette dernière au fil du temps.
+
+```{r, include=FALSE}
+
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(reshape2)
+library("forecast")
+```
+# 1°Analyse descriptive et quelques statistiques de notre jeu de données !
+```{r, echo=FALSE}
+Temp<- read.csv("temperature.csv",header=T,sep=",")
+Temp$Date <- as.Date(Temp$Date, format = "%Y-%m-%d")
+str(Temp) # visualiser la structure du fichier 
+head(Temp) # afficher les 10 premières observations
+summary(Temp) # résumer le fichier de données
+```
+
+Le jeu de données présente 2 variables: la date et la température journalière moyenne, et 4826 observations correspondant à toutes les températures mesurées à Marignane depuis le 1er Janvier 2010. Sur l'ensemble de cette période, une température moyenne a été constaté de 17,3°C avec minima de 4,8° et maxima de 29,1°.
+
+```{r}
+# transformation modèle additif
+
+Temp.ts=ts(Temp$mean.temp,start=c(2010,1,1),end=c(2023,3,19),frequency=365)
+source("boxcox.r")
+
+A = seq(0,0.5,0.1)
+n = length(Temp.ts)
+M = matrix(0,n,length(A))
+			
+for(i in (1:length(A))){
+		 M[,i] = boxcox(Temp.ts,A[i])
+}
+M = ts(M,start=c(2010,1,1),frequency=365)
+ts.plot(M, col=(1:length(A)))
+
+legend('topleft',legend=paste("a=",as.character(A),sep=""),col=(1:length(A)),lty = 1)
+```
+
+```{r}
+# Régression linéaire pour estimer la tendance
+TempTS = ts(Temp$mean.temp,start=c(2010,1),frequency=365)
+lm.TempTS = lm(TempTS ~ time(TempTS))
+plot(TempTS, main="TempTS")
+# lines( as.vector(time(TempTS)),lm.TempTS$fitted.values,col="blue")
+```
+
+Une erreur s'affichant, nous ne nous sommes pas parvenus à tracer la droite de régression d'ordre 1. Mais au vue du graphique nous pouvons dès lors supposer une tendance croissante avec un effet saisonnier annuel, avec un pic annuel avoisinant les 28°C. Cela correspond naturellement à la période estivale.
+
+
+```{r, echo=FALSE}
+plot(Temp)
+```
+Ci-dessus le nuage de points du jeu de données.
+
+```{r, echo=FALSE}
+acf(Temp)
+pacf(Temp)
+acf(Temp,lag.max=75) 
+pacf(Temp, lag.max=75)
+```
+
+L'ACF mesure la corrélation entre une observation de la série chronologique et ses observations passées à différents retards. Ici nous avons pris retard lag=75 L'ACF montre à quelle vitesse la corrélation décroît à mesure que le retard augmente. On observe que la corrélation décroît lentement, cela suggère qu'il y a une forte dépendance temporelle dans la série.
+La PACF, quant à elle, mesure la corrélation entre une observation de la série chronologique et une observation passée à un retard particulier (ici lag=75), en éliminant l'effet de toutes les observations intermédiaires.
+
+On voit alors que notre série présente une forte dépendance selon le temps.En effet, malgré des retards assez grands (resp. 30 et 75), la série présentent tout de même une corrélation importante entre ses observations. 
+
+Il est alors intéréssant de stationnariser la série chronologique afin de la transformer  en une série plus simple et régulière, ce qui facilitera son analyse et sa modélisation.
+
+# 2° Stationnarisation de la série
+
+```{r}
+Yd1 = diff(Temp$mean.temp) 
+plot(Yd1)
+acf(Yd1)  
+			
+Yd1ds1 =  diff(Yd1,lag=12)
+plot(Yd1ds1) 
+acf(Yd1ds1)
+			
+Yd1ds2 =  diff(Yd1ds1,lag=12)
+plot(Yd1ds2)  
+acf(Yd1ds2,lag=75)
+pacf(Yd1ds2,lag=75)
+		
+```
+
+Par la différenciation, nous pouvons alors étudier la stationnarisation de la série.
+On observe qu'au degré 2, nous ne sommes pas encore dans un état stationnaire. En observant l'AFC et le PAFC on retrouve encore des périodes dépassant les bornes stationnaires, mais les pics sont moins élevés désormais.
+Pour ajuster notre modèle ARMA d'ordre (p,q) où p (resp. q) sont les nombres de pics sur le graphique AFC (resp.  graphique PAFC), on a donc p=3 et q=6.
+
+```{r}
+source("armaic.r")
+
+A=armaic(Yd1ds2,M=9,include.mean=FALSE)
+A
+
+```
+On choisit ainsi le modèle ARMA (2,7), celui qui minimise un maximum l'AIC.
+
+```{r}
+out.Yd1ds2=A$model
+ResY=out.Yd1ds2$residuals
+p= 2
+q= 7
+Box.test(ResY,lag=10,type = "Ljung-Box") 
+```
+Ainsi, avec une p-value < 2.2e-16, on peut donc rejeter l'hypothèse H0 où le modèle serait stationnaire.
+
+```{r}
+out.Temp = arima(Temp$mean.temp,order=c(3,1,6),seasonal=list(order=c(0,2,0),period=12),include.mean = FALSE)
+H = 50
+predList = predict(out.Temp,n.ahead=H)
+predList
+
+```
+
+A partir du modèle ARMA,il nous est alors possible de prédire les 50 prochaines observations à l'aide de la fonction ARIMA.
+
